@@ -30,6 +30,7 @@ There is no heartbeat message. Liveness comes from an external watchdog that a c
 bin/curated-digest task list                  # schedules, models, what is due
 bin/curated-digest task run <id> --dry-run    # real output, no state written
 bin/curated-digest task run <id> --model gemini:gemini-3.7-flash   # try another model once
+bin/curated-digest task sent [<id>] -n 5      # digests as they were actually delivered
 bin/curated-digest status                     # harness counts and anything needing attention
 bin/curated-digest health                     # self-check, pings the watchdog if clean
 bin/curated-digest pause                      # stop new runs without killing work in flight
@@ -41,11 +42,12 @@ The config home is `$CURATED_DIGEST_HOME`, else `$XDG_CONFIG_HOME/curated-digest
 
 | File | Holds | Format |
 |---|---|---|
-| `tasks/*.yaml` | Your tasks | YAML: `id`, `source` (one `{type, url}` or a list of `{type, url, id}`), `criteria`, `schedule`, `model` (`provider:model`), `renderer`, `channel`, `urgency`, `heading`. Optional `link`, `prefilter` (`max_age_days`, `include`, `exclude`) |
+| `tasks/*.yaml` | Your tasks | YAML: `id`, `source` (one `{type, url}` or a list of `{type, url, id}`), `criteria`, `schedule`, `model` (`provider:model`), `renderer`, `channel`, `urgency`, `heading`. Optional `link`, `window` (`HH:MM-HH:MM`, D33), `bullet` (`line` or `title+line`), `prefilter` (`max_age_days`, `include`, `exclude`) |
 | `telegram.env` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | `KEY=value`, mode 0600 |
 | `gemini.env` | `GEMINI_API_KEY` (for `gemini:` models) | `KEY=value`, mode 0600 |
 | `reddit.env` | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` | `KEY=value`, mode 0600 |
 | `curated-digest.env` | `CURATED_DIGEST_HC_PING_URL` (watchdog) | `KEY=value`, mode 0600 |
+| `checks/` | Scripts for `shell` sources. Commands run from the config home | Executables: exit 0 healthy, 1 a finding (stdout is the item), anything else broken (D32) |
 | `voice.md` | The voice the digest is written in | Plain text. Defaults to `prompts/voice.md` |
 
 State (ledger, item store, pause flag) lives in `$CURATED_DIGEST_STATE_DIR`, else `$XDG_STATE_HOME/curated-digest`, else `~/.local/state/curated-digest`. Back it up with `bin/backup-state.sh`, which uses SQLite's backup API.
@@ -54,6 +56,7 @@ Path overrides and defaults are in [.env.example](../.env.example). Rate-limit s
 
 ## Extending
 
+- **Source types:** `rss`, `reddit`, `greenhouse` and `ashby` (public job-board APIs, filtered by `office_id=` or `location=` in the url, D35), and `shell`, a check that runs on the host: `{type: shell, id: disk, run: "checks/disk-space.sh 90"}`. Keep volatile numbers out of a check's first line of output: it is the item's identity, so a standing problem is reported once.
 - **A source:** a module in `curated_digest/sources/` that returns normalized `Item`s and raises `SourceError` on failure, never an empty list (R36). Register its `type` in `dispatch.SOURCE_TYPES` and in the allowed types in `task.py`. Anything a judgment needs is computed here, not by the model (R19a).
 - **A provider:** one adapter in `curated_digest/providers/` with `complete(prompt, model) -> Completion`, registered by name. It must have no tool layer, or a locked-down one (R20, D28).
 - **A channel or renderer** (`dispatch.CHANNELS` / `RENDERERS`): channels send and return confirmed success only (R14). Renderers turn judgments into an artifact and report which item ids they showed (R28).
