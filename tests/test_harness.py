@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import unittest
+import unittest.mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -279,6 +280,19 @@ class Confinement(Base):
             self.ledger.submit(c, "j")
             self.runner.tick(c, self.cfg)
         self.assertEqual((self.dir / "roots.txt").read_text().strip(), "/only/here")
+
+    def test_instance_paths_reach_jobs_but_the_watchdog_url_does_not(self):
+        # A relocated instance must be the same instance under the harness as
+        # from a terminal. The watchdog URL is a credential, not a location.
+        env = {"CURATED_DIGEST_HOME": "/inst", "CURATED_DIGEST_TELEGRAM_ENV": "/sec/t.env",
+               "CURATED_DIGEST_HC_PING_URL": "https://example.invalid/ping"}
+        with unittest.mock.patch.dict(os.environ, env):
+            with self.ledger.connect() as c:
+                self.job(c, 'echo "$CURATED_DIGEST_HOME|$CURATED_DIGEST_TELEGRAM_ENV|'
+                            '${CURATED_DIGEST_HC_PING_URL:-absent}" > paths.txt', self.VERIFY)
+                self.runner.tick(c, self.cfg)
+        self.assertEqual((self.dir / "paths.txt").read_text().strip(),
+                         "/inst|/sec/t.env|absent")
 
     def test_secrets_are_not_passed_to_jobs(self):
         os.environ["TELEGRAM_BOT_TOKEN"] = "should-not-leak"
