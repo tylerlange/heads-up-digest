@@ -63,6 +63,20 @@ def side_effect_confirmed(job, cwd, baseline) -> bool:
     return True
 
 
+# Where the operator's instance lives. These are locations, not secrets: a
+# credential file's path is forwarded, its contents never are. Without them a
+# task the harness runs would look for its tasks, voice and credentials in the
+# default places, so an instance relocated by environment variable would work
+# from a terminal and break under the timer.
+INSTANCE_PATHS = {
+    "XDG_CONFIG_HOME", "XDG_STATE_HOME",
+    "CURATED_DIGEST_HOME", "CURATED_DIGEST_TASKS_DIR", "CURATED_DIGEST_CONFIG",
+    "CURATED_DIGEST_EDITORIAL_FILE", "CURATED_DIGEST_ENV",
+    "CURATED_DIGEST_TELEGRAM_ENV", "CURATED_DIGEST_GEMINI_KEY_FILE",
+    "CURATED_DIGEST_REDDIT_ENV",
+}
+
+
 def _scrubbed_env(job, cwd) -> dict:
     """R32: nothing handling untrusted input carries secrets. The harness runs
     trusted build work today, but the same runner will later run fetch jobs, so
@@ -74,7 +88,7 @@ def _scrubbed_env(job, cwd) -> dict:
     is the job's own working directory plus curated-digest's state.
     """
     keep = {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TZ"}
-    env = {k: v for k, v in os.environ.items() if k in keep}
+    env = {k: v for k, v in os.environ.items() if k in keep | INSTANCE_PATHS}
     env["CURATED_DIGEST_STATE_DIR"] = str(config.state_dir())
     env["CLAUDE_CONFINE_ROOTS"] = job["confine"] or f"{cwd}:{config.state_dir()}"
     return env
