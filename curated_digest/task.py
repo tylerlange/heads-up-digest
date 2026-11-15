@@ -13,16 +13,24 @@ from pathlib import Path
 
 import yaml
 
+from .sources import SOURCE_TYPES
+
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 SCHEDULE_EVERY_RE = re.compile(r"^every (\d+)(m|h)$")
 SCHEDULE_DAILY_RE = re.compile(r"^daily at (\d{2}):(\d{2})$")
+WINDOW_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
 URGENCIES = ("digest", "prompt", "urgent")
+# How a digest bullet is built. `line` is the curator's sentence alone, which
+# suits news. `title+line` links the item's own title and puts the curator's
+# line under it as the reason, for items whose title is the fact (a job
+# posting) and must not be paraphrased by a model.
+BULLETS = ("line", "title+line")
 
 REQUIRED = ("id", "source", "criteria", "schedule", "model", "renderer",
             "channel", "urgency", "heading")
 # R7 lists id/source/criteria/schedule/model/renderer/channel/urgency; heading
 # is required too so a rendered message never has to invent a title.
-OPTIONAL = ("link", "prefilter")
+OPTIONAL = ("link", "prefilter", "window", "bullet")
 KNOWN_KEYS = set(REQUIRED) | set(OPTIONAL)
 
 
@@ -35,6 +43,18 @@ class Source:
     id: str
     type: str
     url: str
+    command: str = ""           # `shell` sources only: the check to run
+
+    @property
+    def locator(self) -> str:
+        """What the source implementation is pointed at. A url for anything
+        fetched over the network, a command for a `shell` check.
+
+        Exists so `_fetch_source` stays free of `if src.type ==` branches: R2
+        says adding a source type must not require changes elsewhere, and a
+        dispatcher that special-cases one type has already broken that.
+        """
+        return self.command or self.url
 
 
 @dataclass(frozen=True)
@@ -49,9 +69,11 @@ class Task:
     urgency: str                # digest | prompt | urgent
     heading: str
     link: str | None = None
+    window: str | None = None   # "HH:MM-HH:MM" local; outside it, never runs
     max_age_days: int | None = None
     include: tuple[str, ...] = field(default_factory=tuple)
     exclude: tuple[str, ...] = field(default_factory=tuple)
+    bullet: str = "line"         # see BULLETS
     path: str = ""               # file it came from
 
 
@@ -143,6 +165,19 @@ def load_task(path) -> Task:
         raise TaskError(path, "link is single-source only: a digest spanning "
                               f"{len(sources)} sources cannot footnote one url")
 
+    window = d.get("window")
+    if window is not None:
+        if not isinstance(window, str) or not WINDOW_RE.match(window):
+            raise TaskError(path, f"window {window!r} must be 'HH:MM-HH:MM'")
+        try:
+            parse_window(window)
+        except TaskError as e:
+            raise TaskError(path, e.reason)
+
+    bullet = d.get("bullet", "line")
+    if bullet not in BULLETS:
+        raise TaskError(path, f"bullet {bullet!r} must be one of {BULLETS}")
+
     prefilter = d.get("prefilter") or {}
     if not isinstance(prefilter, dict):
         raise TaskError(path, "prefilter must be a mapping")
@@ -166,9 +201,11 @@ def load_task(path) -> Task:
         urgency=urgency,
         heading=str(d["heading"]),
         link=link,
+        window=window,
         max_age_days=max_age_days,
         include=include,
         exclude=exclude,
+        bullet=bullet,
         path=str(path),
     )
 
@@ -205,17 +242,37 @@ def _parse_sources(path, source, task_id) -> tuple:
     for i, e in enumerate(entries):
         if not isinstance(e, dict):
             raise TaskError(path, "each source must be a mapping")
-        unknown = set(e) - {"type", "url", "id"}
+        unknown = set(e) - {"type", "url", "id", "run"}
         if unknown:
             raise TaskError(path, f"unknown source key(s): {sorted(unknown)}")
-        if e.get("type") not in ("rss", "reddit"):
+        if e.get("type") not in SOURCE_TYPES:
             raise TaskError(path, f"source.type {e.get('type')!r} is not supported")
-        url = e.get("url")
-        if not isinstance(url, str) or not re.match(r"^https?://", url):
-            raise TaskError(path, f"source.url {url!r} is not http(s)")
+
+        # `url` and `run` are the two mutually exclusive ways to address a
+        # source, and accepting both would leave `locator` silently picking a
+        # winner. A shell check with a url is a copy-paste error, not a config.
+        url, command = e.get("url"), ""
+        if e["type"] == "shell":
+            if url is not None:
+                raise TaskError(path, "a shell source takes `run`, not `url`")
+            command = e.get("run")
+            if not isinstance(command, str) or not command.strip():
+                raise TaskError(path, "shell source needs a non-empty `run`")
+            command, url = command.strip(), ""
+        else:
+            if "run" in e:
+                raise TaskError(path, f"`run` is shell-only, not {e['type']!r}")
+            if not isinstance(url, str) or not re.match(r"^https?://", url):
+                raise TaskError(path, f"source.url {url!r} is not http(s)")
 
         sid = e.get("id")
         if sid is None:
+            # A shell check has no url to slug, so an unnamed one in a list has
+            # nothing stable to key state on. Naming it is the cheap fix, and
+            # demanding the name is better than inventing `check-2`, which
+            # reorders into a different check the day one is deleted.
+            if len(entries) > 1 and e["type"] == "shell":
+                raise TaskError(path, "a shell source in a list needs an `id`")
             sid = task_id if len(entries) == 1 else f"{task_id}/{_slug(url)}"
         elif len(entries) > 1 or sid != task_id:
             sid = sid if sid.startswith(f"{task_id}") else f"{task_id}/{sid}"
@@ -224,7 +281,7 @@ def _parse_sources(path, source, task_id) -> tuple:
         if sid in seen:
             raise TaskError(path, f"duplicate source id {sid!r}")
         seen.add(sid)
-        out.append(Source(sid, e["type"], url))
+        out.append(Source(sid, e["type"], url, command))
     return tuple(out)
 
 
@@ -253,10 +310,53 @@ def parse_schedule(s: str) -> dict:
     raise TaskError("<schedule>", f"unrecognised schedule: {s!r}")
 
 
-def is_due(schedule: str, last_run: int | None, now: float, tz_offset_hours=None) -> bool:
+def parse_window(s: str) -> tuple[int, int]:
+    """"HH:MM-HH:MM" as minutes past midnight. A start later than the end means
+    the window wraps midnight (22:00-06:00), which is a legitimate thing to
+    want and would otherwise parse as a window that is never open."""
+    m = WINDOW_RE.match(s or "")
+    if not m:
+        raise TaskError("<window>", f"unrecognised window: {s!r}")
+    sh, sm, eh, em = (int(g) for g in m.groups())
+    if sh > 23 or eh > 23 or sm > 59 or em > 59:
+        raise TaskError("<window>", f"invalid time in window: {s!r}")
+    start, end = sh * 60 + sm, eh * 60 + em
+    if start == end:
+        raise TaskError("<window>", f"window {s!r} is zero-length")
+    return start, end
+
+
+def in_window(window: str | None, now: float, tz_offset_hours=None) -> bool:
+    """No window declared means always open — the existing tasks must keep
+    behaving exactly as they did."""
+    if not window:
+        return True
+    start, end = parse_window(window)
+    struct = (time.localtime(now) if tz_offset_hours is None
+              else time.gmtime(now + tz_offset_hours * 3600))
+    minute = struct.tm_hour * 60 + struct.tm_min
+    if start < end:
+        return start <= minute < end
+    return minute >= start or minute < end       # wraps midnight
+
+
+def is_due(schedule: str, last_run: int | None, now: float, tz_offset_hours=None,
+           window: str | None = None) -> bool:
     """A new task (last_run is None) is due on its next tick — waiting for a
     second tick before ever firing would make a freshly added task look dead.
+
+    The window is checked FIRST, and it gates running rather than sending. A
+    task held outside its window never fetches, never pays a model and never
+    records a run, so it simply becomes due again the moment the window opens.
+    Suppressing at the delivery seam instead would have spent the money at
+    03:00 to produce a digest nobody could be shown.
+
+    This deliberately does not touch the health alerter (R25/R42b): the host being
+    broken still interrupts at any hour. Only content digests keep hours.
     """
+    if not in_window(window, now, tz_offset_hours):
+        return False
+
     if last_run is None:
         return True
 

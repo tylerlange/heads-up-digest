@@ -74,6 +74,23 @@ CREATE TABLE IF NOT EXISTS task_state (
   -- on every single tick forever.
   last_run_at       INTEGER
 );
+
+-- What the digest actually said, which until now existed nowhere. `reported` records
+-- which items went out, never the sentences the curator wrote about them, so
+-- the one artifact worth reviewing was the one thing discarded on send. No
+-- prompt change could be A/B'd and no regression in the voice could be seen.
+--
+-- Deliberately denormalized: this is an archive of messages as sent, so it
+-- must survive the items it describes being swept (R13 retention).
+CREATE TABLE IF NOT EXISTS deliveries (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id  TEXT NOT NULL,
+  sent_at  INTEGER NOT NULL,
+  heading  TEXT,
+  body     TEXT NOT NULL,
+  kind     TEXT NOT NULL DEFAULT 'digest'   -- digest | broken-sources
+);
+CREATE INDEX IF NOT EXISTS deliveries_task ON deliveries(task_id, sent_at);
 """
 
 FIRST_RUN_CAP = 10          # R15
@@ -195,6 +212,28 @@ def mark_reported(conn, task_id, rows) -> int:
            ON CONFLICT(task_id) DO UPDATE SET last_delivered_at=excluded.last_delivered_at""",
         (task_id, now(), now()))
     return n
+
+
+def record_delivery(conn, task_id, artifact, *, kind="digest") -> int:
+    """R14's sibling: called only after a send is confirmed, for the same
+    reason. An archive that also holds messages that were never delivered is
+    not an archive of what the reader saw, which is the only thing it is for."""
+    cur = conn.execute(
+        "INSERT INTO deliveries(task_id, sent_at, heading, body, kind) VALUES (?,?,?,?,?)",
+        (task_id, now(), getattr(artifact, "title", None), artifact.body, kind))
+    return cur.lastrowid
+
+
+def deliveries(conn, *, task_id=None, limit=20) -> list:
+    """Newest first. `limit` has a default because the plausible mistake here
+    is dumping three months of digests into a terminal."""
+    if task_id:
+        return conn.execute(
+            """SELECT * FROM deliveries WHERE task_id=?
+               ORDER BY sent_at DESC, id DESC LIMIT ?""", (task_id, limit)).fetchall()
+    return conn.execute(
+        "SELECT * FROM deliveries ORDER BY sent_at DESC, id DESC LIMIT ?",
+        (limit,)).fetchall()
 
 
 def mark_judged(conn, task_id, rows) -> int:

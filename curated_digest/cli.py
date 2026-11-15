@@ -73,7 +73,7 @@ def cmd_task_list(a):
         store.ensure_schema(c)
         for t in tasks:
             lr = store.last_run(c, t.id)
-            due = task.is_due(t.schedule, lr, time.time())
+            due = task.is_due(t.schedule, lr, time.time(), window=t.window)
             print(f"  {t.id:<24} {t.schedule:<16} {t.model:<28} "
                   f"{'DUE' if due else 'waiting'}")
     # R9: broken tasks are surfaced, never silently skipped.
@@ -126,6 +126,33 @@ def cmd_task_run(a):
     return 0
 
 
+def cmd_task_sent(a):
+    """Read back what the digest actually said.
+
+    The reason this subcommand exists rather than leaving people to open the
+    sqlite file: an archive nobody can read at a glance is one nobody consults,
+    and the whole point of keeping it is reviewing the voice after a prompt or
+    criteria change.
+    """
+    from . import store
+    with ledger.connect() as c:
+        store.ensure_schema(c)
+        rows = store.deliveries(c, task_id=a.task_id, limit=a.limit)
+
+    if a.json:
+        print(json.dumps([dict(r) for r in rows], indent=2))
+        return 0
+    if not rows:
+        print("nothing delivered yet")
+        return 0
+    for r in rows:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["sent_at"]))
+        print(f"--- {when}  {r['task_id']}  ({r['kind']})")
+        print(r["body"])
+        print()
+    return 0
+
+
 def cmd_dispatch(a):
     """Submit a harness unit for every task that is due.
 
@@ -144,7 +171,8 @@ def cmd_dispatch(a):
             ledger.define_job(
                 c, job_id, f"{config.REPO}/bin/curated-digest task run {t.id}",
                 cwd=str(config.REPO), timeout_s=1800)
-            if not task.is_due(t.schedule, store.last_run(c, t.id), time.time()):
+            if not task.is_due(t.schedule, store.last_run(c, t.id), time.time(),
+                               window=t.window):
                 continue
             # Never queue a second unit for a task already waiting to run —
             # a rate-limited task would otherwise pile up one unit per tick.
@@ -314,6 +342,12 @@ def main(argv=None):
                     help="run against this model instead of the task's, for "
                          "this invocation only; never written back")
     tr.set_defaults(fn=cmd_task_run)
+
+    tsent = ts.add_parser("sent", help="digests as they were actually delivered")
+    tsent.add_argument("task_id", nargs="?")
+    tsent.add_argument("-n", "--limit", type=int, default=10)
+    tsent.add_argument("--json", action="store_true")
+    tsent.set_defaults(fn=cmd_task_sent)
 
     s.add_parser("dispatch", help="queue a unit for every due task"
                  ).set_defaults(fn=cmd_dispatch)

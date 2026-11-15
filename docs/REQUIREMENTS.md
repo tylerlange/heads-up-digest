@@ -177,6 +177,14 @@ configuration, none tested behaviour, and three failures shipped looking correct
 - **R47.** Curation and formatting are covered by fixture tests so criteria and prompts
   can change without silent regression.
 - **R48.** Injection resistance is a permanent regression test.
+- **R50.** A source may be a **command on the host**, not only a fetch. Its exit code
+  is the contract: 0 healthy and silent, 1 a finding, anything else a broken check
+  reported under R36 (D32). Checks run with an allowlisted environment (R32).
+- **R51.** A task may declare an hour `window`. Outside it the task does not run at
+  all (no fetch, no model spend, no recorded run), so nothing is held and nothing
+  is lost (D33). The health alerter is exempt: R25/R42b still interrupt at any hour.
+- **R52.** Every delivered artifact is **archived as sent** (D34). Without it no
+  change to criteria, prompt or voice can be evaluated after the fact.
 - **R49.** Facts the system relies on about live systems carry a verification command and
   a last-verified date; stale facts are flagged. *(Gap found in draft 1 review — a stale
   fact caused a real wrong answer.)*

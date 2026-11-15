@@ -275,6 +275,95 @@ cadence change makes old history dominate the estimate.
 
 ---
 
+### D32. A check's exit code is the finding, and an unexpected one is a broken check
+The shell source could have parsed stdout for a keyword, or asked each check to
+emit JSON. Both make a check that crashes indistinguishable from a check that
+found nothing, which is R36's failure aimed at the alarm itself.
+
+`0` healthy, `1` a finding, **anything else means the check is broken** and
+raises SourceError so it lands in `source_state` and gets reported. A deleted
+script, a missing interpreter, a `docker` that is not on PATH and a check killed
+by the OOM killer all land in that third bucket rather than reading as silence.
+
+**This was not theoretical.** An early disk check used a `df` flag combination
+df refuses, and the failure was piped into an empty loop that exited 0: a
+confident all-clear from a check that never ran, on a box with a filesystem at
+96%. Every check should prove in tests that losing its tool is loud.
+
+**Item identity is the first line of stdout**, so a standing problem is one item
+reported once rather than a notification every run. The cost is that checks must
+keep volatile numbers out of their headline, which is a documented rule rather
+than an enforced one.
+
+Checks run from the config home, not the engine: they belong to the operator's
+instance, and a task can say `checks/disk.sh` without naming an absolute path.
+
+**Revisit if:** a check needs to report several independent findings at once.
+One check per source is the current answer and it costs nothing.
+
+### D33. The hour window gates running, not sending
+A digest that arrives at 3am is a notification nobody wanted. The obvious fix is
+to hold the rendered artifact until morning, and it is the wrong one: it spends
+the model call at 03:00 to build something nobody can be shown, and it puts a
+queue of undelivered artifacts between R14 and the send it protects.
+
+Gating `is_due` instead means a held task never fetches, never pays and never
+records a run. It is simply due again when the window opens, and R14 is
+untouched because nothing ran.
+
+**The health alerter is deliberately exempt.** R25 and R42b promise that a
+broken host interrupts within one tick, with no model in the path. Windowing
+that would trade the one alarm worth waking up for against digests that are
+worth nothing at 3am. Only content keeps hours.
+
+**Revisit if:** a task wants a window per weekday, or the `prompt` urgency tier
+gets implemented: a silent-notification tier is a different answer to the same
+problem and may make windows redundant for some tasks.
+
+### D34. What was delivered is archived; what was judged already was
+`reported` recorded which items went out. The sentences the curator wrote about
+them, the only thing the reader actually reads, were discarded on send. Every
+criteria and prompt change was therefore unmeasurable: no A/B, no way to see a
+regression in the voice, no way to answer "why did it say that" a week later.
+
+`deliveries` stores each message as sent, written in the same confirmed-send
+branch as `mark_reported`, and `task sent` reads it back. It is denormalized on
+purpose: it must survive the six-month item sweep (D29), because an archive that
+empties itself is not one.
+
+**Revisit if:** a feedback signal arrives (a reaction, a reply, a tap). This
+table is the join target for it.
+
+### D35. Job boards: structured feeds, filtered in `fetch`, titles never paraphrased
+Greenhouse and Ashby both publish public board APIs, so the `greenhouse` and
+`ashby` sources read JSON rather than scraping rendered careers pages, several
+of which sit behind bot challenges anyway.
+
+The filter is in the task url (`office_id=`, `location=`) and applied in
+`fetch`, because `parse` only ever sees bytes and a source id (R2). Ashby's
+public API exposes location names, not the uuid a careers page filters on, so
+the filter is the name. A filter that matches nothing on a full board raises
+`SourceError`, so a renamed location reads as broken rather than quiet (R36).
+
+A posting's title, team and location are the facts the reader acts on, so the
+source builds them into `Item.title` and the link from the posting id, and the
+task sets `bullet: title+line`: the renderer links the source's title and puts
+the curator's line under it as the reason. The model cannot misstate a title it
+never writes.
+
+**Revisit if:** an employer moves off its board provider (the source goes
+broken, not quiet), or an office id or location name changes.
+
+### D36. The curator is told which source each item came from
+A digest spanning several feeds sent the model items with no source attached.
+A post about a feature whose name two products share went out credited to the
+wrong product, because the criteria happened to name that one first. Each item
+block now carries `source:`, the tail of the source id. That id comes from the
+task file, so it is trusted text and adds no injection surface.
+
+**Revisit if:** a source id stops naming its product (an opaque id like
+`feed1`). The fix then is an optional, operator-written `about:` per source.
+
 ## Open
 
 - ~~**O1** Repo name.~~ **Resolved: `curated-digest`.**

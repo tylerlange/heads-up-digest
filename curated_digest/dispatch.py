@@ -14,16 +14,12 @@ from .channels import telegram as tg_channel
 from .curate import curate
 from .providers import RateLimited          # noqa: F401  (callers catch it)
 from .renderers import telegram as tg_renderer
-from .sources import reddit, rss
+from .sources import SOURCE_TYPES
 from .sources.base import SourceError
 
 # Reddit returns 429 for requests a second apart. Cheap insurance: a digest
 # spanning several feeds is not in a hurry.
 SOURCE_GAP_SECONDS = 5
-
-# R2: a source type is a registry entry. Adding one must not reach into
-# curation, rendering, or delivery — they only ever see the normalized Item.
-SOURCE_TYPES = {"rss": rss, "reddit": reddit}
 
 RENDERERS = {"telegram": tg_renderer}
 CHANNELS = {"telegram": tg_channel}
@@ -113,7 +109,8 @@ def _run(conn, task, dry_run, now) -> dict:
     renderer = RENDERERS[task.renderer]
     artifact = renderer.render(
         judged, by_id, heading=_heading(task, now), link=task.link,
-        broken_sources=store.broken_sources(conn))
+        broken_sources=store.broken_sources(conn),
+        label_sources=len(task.sources) > 1, bullet=task.bullet)
 
     if artifact is None:
         out["outcome"] = "silent"        # R26: the normal, correct outcome
@@ -131,6 +128,11 @@ def _run(conn, task, dry_run, now) -> dict:
     # advances state. If send() raised or returned False we never get here, and
     # the finding survives to the next run.
     if delivered:
+        # Archived before anything else, and inside the same confirmed-send
+        # branch as mark_reported: an archive that can disagree with `reported`
+        # about what went out is worse than no archive.
+        store.record_delivery(conn, task.id, artifact)
+
         # What the renderer *presented*, not what the curator kept. The digest
         # caps its tiers, so a run that keeps seven findings may show five —
         # marking all seven reported writes the other two off unseen, which is
@@ -172,7 +174,7 @@ def _fetch_source(conn, src, out) -> str:
     impl = SOURCE_TYPES[src.type]
     headers = store.conditional_headers(conn, src.id)
     try:
-        raw, resp = impl.fetch(src.url, etag=headers.get("etag"),
+        raw, resp = impl.fetch(src.locator, etag=headers.get("etag"),
                                modified=headers.get("modified"))
     except SourceError as e:
         store.record_failure(conn, src.id, e.reason)
@@ -209,13 +211,25 @@ def _maybe_report_broken(conn, task, out, dry_run) -> dict:
         return out
     try:
         out["delivered"] = CHANNELS[task.channel].send(artifact)
+        if out["delivered"]:
+            store.record_delivery(conn, task.id, artifact, kind="broken-sources")
     except Exception as e:                      # never let the alarm be fatal
         out["report_error"] = str(e)[:200]
     return out
 
 
 def _heading(task, now) -> str:
-    return task.heading.replace("{date}", time.strftime("%b %-d", time.localtime(now)))
+    """`{date}` and `{time}`, both local.
+
+    `{time}` exists because a date-only heading collided with itself: on 15 of
+    23 days the Reddit task sent 2-4 messages all headed with the same date,
+    indistinguishable in a notification list. A task that can deliver more than
+    once a day should put the clock in its heading.
+    """
+    at = time.localtime(now)
+    return (task.heading
+            .replace("{date}", time.strftime("%b %-d", at))
+            .replace("{time}", time.strftime("%H:%M", at)))
 
 
 class _Row:
