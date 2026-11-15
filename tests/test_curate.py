@@ -98,6 +98,15 @@ class PromptConstruction(unittest.TestCase):
         # Exactly one closing delimiter: the one we wrote.
         self.assertEqual(p.count("</untrusted_item>"), 1)
 
+    def test_each_item_names_its_source(self):
+        # A mixed-source digest once credited one product's feature to another
+        # because the curator could not see which feed an item came from.
+        p = curate.build_prompt(
+            [It("x", source_id="digest/selfhosted"),
+             It("y", source_id="digest/linux")], "c")
+        self.assertIn('<untrusted_item id="x">\nsource: selfhosted\n', p)
+        self.assertIn('<untrusted_item id="y">\nsource: linux\n', p)
+
     def test_bodies_are_truncated(self):
         p = curate.build_prompt([It("x", body="z" * 99999)], "c")
         self.assertLess(len(p), curate.MAX_BODY_CHARS + 2000)

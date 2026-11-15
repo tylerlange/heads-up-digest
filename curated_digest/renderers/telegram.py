@@ -48,7 +48,7 @@ def _bullet(item, judgment) -> str:
     """One bullet, linked to the item it came from.
 
     A digest spanning several sources cannot be footnoted with a single link:
-    doing that shipped Pixel tips under a link to r/steammachine for a week.
+    doing that shipped one subreddit's tips under a link to another for a week.
     The link belongs to the finding, so it is attached to the finding. Truncate
     before escaping — LINE_CHARS is a budget for what the reader reads, not for
     `&amp;`.

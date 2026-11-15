@@ -52,7 +52,7 @@ def target(url: str) -> tuple[str, str, str | None]:
     A tips digest wants `/top` over a window, where the community has already
     done the first pass. Read it off the URL so a task file says what it means:
 
-        https://www.reddit.com/r/steammachine/top/?t=week
+        https://www.reddit.com/r/selfhosted/top/?t=week
     """
     m = SUB_RE.search(url)
     if not m:
@@ -183,7 +183,7 @@ def enrich(items, *, timeout=20):
     it to curation as text.
 
     Reddit's listing endpoint returns `selftext`, which is empty for link and
-    image posts — so the two most useful posts in a week of r/steammachine
+    image posts — so the two most useful posts in a week of one subreddit
     reached the filter as a bare title with 26 characters of flair behind them
     and were correctly cut for having no stated tip. The tip was in the
     comments the whole time.
