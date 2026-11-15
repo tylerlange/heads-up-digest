@@ -17,6 +17,13 @@ MAX_FYI = 5
 LINE_CHARS = 150
 BULLET = "• "
 
+# Below this, the Act / Worth knowing split costs more than it earns. The
+# headers exist to let a nine-bullet digest be skimmed by actionability; at two
+# bullets there is nothing to skim, and the message becomes three lines of
+# structure wrapped around one line of content. Measured against the live
+# history: 34 of the first 46 messages carried exactly one bullet.
+TIER_HEADER_MIN = 3
+
 # Only these get turned into an anchor. Item urls come from feed and API data,
 # which is untrusted input like everything else a source hands us.
 SAFE_URL = re.compile(r"^https?://", re.I)
@@ -44,7 +51,19 @@ def _text(item, judgment) -> str:
     return line
 
 
-def _bullet(item, judgment) -> str:
+def _source_label(item) -> str:
+    """The tail of a source id, for a digest spanning several of them.
+
+    A three-subreddit digest renders bullets that are indistinguishable from
+    each other — a tip from one subreddit and a tip from another read identically until you
+    tap the link. Single-source tasks get nothing, because labelling every
+    bullet `claude-whats-new` is noise.
+    """
+    sid = getattr(item, "source_id", "") or ""
+    return sid.rsplit("/", 1)[-1] if "/" in sid else ""
+
+
+def _bullet(item, judgment, label_sources=False, bullet="line") -> str:
     """One bullet, linked to the item it came from.
 
     A digest spanning several sources cannot be footnoted with a single link:
@@ -53,10 +72,22 @@ def _bullet(item, judgment) -> str:
     before escaping — LINE_CHARS is a budget for what the reader reads, not for
     `&amp;`.
     """
-    body = html.escape(_text(item, judgment))
+    titled = bullet == "title+line" and (getattr(item, "title", "") or "").strip()
+    body = html.escape(item.title.strip() if titled else _text(item, judgment))
     url = getattr(item, "url", "") or ""
     if SAFE_URL.match(url):
-        return f'{BULLET}<a href="{html.escape(url, quote=True)}">{body}</a>'
+        body = f'<a href="{html.escape(url, quote=True)}">{body}</a>'
+    if titled:
+        # The source's title is the linked fact; the curator's line is only the
+        # reason it was kept, so it sits underneath and outside the anchor.
+        reason = (judgment.line or judgment.why or "").strip()
+        if reason:
+            body += f"\n   {html.escape(reason)}"
+    # Outside the anchor: the label describes where the finding came from, and
+    # making it part of the tappable text would imply it is part of the tip.
+    label = _source_label(item) if label_sources else ""
+    if label:
+        return f"{BULLET}<b>{html.escape(label)}</b> · {body}"
     return f"{BULLET}{body}"
 
 
@@ -107,7 +138,7 @@ def _select(kept, items_by_id):
 
 
 def render(judgments, items_by_id, *, heading, link=None,
-           broken_sources=()) -> Artifact | None:
+           broken_sources=(), label_sources=False, bullet="line") -> Artifact | None:
     """Returns None when there is nothing worth sending.
 
     R26: silence is the default and correct outcome. Returning an empty digest
@@ -127,12 +158,22 @@ def render(judgments, items_by_id, *, heading, link=None,
 
     parts = [html.escape(heading)]
 
-    if act:
-        parts.append("\nAct")
-        parts += [_bullet(items_by_id[j.item_id], j) for j in act]
-    if fyi:
-        parts.append("\nWorth knowing")
-        parts += [_bullet(items_by_id[j.item_id], j) for j in fyi]
+    def bullets(js):
+        return [_bullet(items_by_id[j.item_id], j, label_sources, bullet) for j in js]
+
+    if len(act) + len(fyi) < TIER_HEADER_MIN:
+        # One blank line, then the findings. Act still comes first, so the
+        # ordering signal survives even though the headers do not.
+        if act or fyi:
+            parts.append("")
+        parts += bullets(act) + bullets(fyi)
+    else:
+        if act:
+            parts.append("\nAct")
+            parts += bullets(act)
+        if fyi:
+            parts.append("\nWorth knowing")
+            parts += bullets(fyi)
 
     # R36/R38: a source that has stopped working is reported. Silence from a
     # broken feed is indistinguishable from a quiet one, and that is the worst

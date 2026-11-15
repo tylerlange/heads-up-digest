@@ -26,6 +26,7 @@ class It:
     id: str
     title: str
     url: str = "https://example.com"
+    source_id: str = "t"
 
 
 def items(*pairs):
@@ -48,16 +49,18 @@ class Rendering(unittest.TestCase):
 
     def test_act_comes_before_worth_knowing(self):
         js = [Judgment("a", True, "fyi", "interesting"),
-              Judgment("b", True, "act", "do this")]
-        body = renderer.render(js, items(("a", "Aye"), ("b", "Bee")),
+              Judgment("b", True, "act", "do this"),
+              Judgment("c", True, "act", "and this")]
+        body = renderer.render(js, items(("a", "Aye"), ("b", "Bee"), ("c", "Cee")),
                                heading="Claude").body
         self.assertLess(body.index("Act"), body.index("Worth knowing"))
         self.assertLess(body.index("Bee"), body.index("Aye"))
 
     def test_an_empty_tier_drops_its_header(self):
         """A good week is not a formatting problem."""
-        body = renderer.render([Judgment("a", True, "fyi", "w")],
-                               items(("a", "T")), heading="Claude").body
+        js = [Judgment(f"a{i}", True, "fyi", "w") for i in range(3)]
+        body = renderer.render(js, items(*[(f"a{i}", f"T{i}") for i in range(3)]),
+                               heading="Claude").body
         self.assertNotIn("Act", body)
         self.assertIn("Worth knowing", body)
 
@@ -233,3 +236,86 @@ class Delivery(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ShortDigestsDropTheTierHeaders(unittest.TestCase):
+    """Measured against the live history: 34 of the first 46 messages carried
+    exactly one bullet, so the common case was three lines of structure wrapped
+    around one line of content."""
+
+    def test_a_single_finding_renders_without_a_header(self):
+        body = renderer.render([Judgment("a", True, "fyi", "w", line="the tip")],
+                               items(("a", "T")), heading="Reddit").body
+        self.assertNotIn("Worth knowing", body)
+        self.assertNotIn("Act", body)
+        self.assertIn("the tip", body)
+
+    def test_two_findings_render_without_headers(self):
+        js = [Judgment("a", True, "act", "w", line="one"),
+              Judgment("b", True, "fyi", "w", line="two")]
+        body = renderer.render(js, items(("a", "A"), ("b", "B")),
+                               heading="Reddit").body
+        self.assertNotIn("Worth knowing", body)
+
+    def test_act_still_leads_when_the_headers_are_gone(self):
+        """The ordering signal has to survive, or collapsing the headers would
+        cost the one thing they were for."""
+        js = [Judgment("a", True, "fyi", "w", line="interesting"),
+              Judgment("b", True, "act", "w", line="actionable")]
+        body = renderer.render(js, items(("a", "A"), ("b", "B")),
+                               heading="Reddit").body
+        self.assertLess(body.index("actionable"), body.index("interesting"))
+
+    def test_three_findings_bring_the_headers_back(self):
+        js = [Judgment(f"a{i}", True, "act", "w", line=f"line {i}") for i in range(3)]
+        body = renderer.render(js, items(*[(f"a{i}", f"T{i}") for i in range(3)]),
+                               heading="Reddit").body
+        self.assertIn("Act", body)
+
+    def test_a_broken_source_report_still_names_its_section(self):
+        """R36's warning is not a finding and must not be collapsed into an
+        unlabelled bullet that reads like content."""
+        art = renderer.render([], {}, heading="Reddit",
+                              broken_sources=[{"source_id": "x", "consecutive_failures": 4}])
+        self.assertIn("Not working", art.body)
+
+
+class SourceLabels(unittest.TestCase):
+    def test_a_multi_source_digest_names_each_bullets_source(self):
+        by_id = {"a": It("a", "T", source_id="digest/selfhosted")}
+        body = renderer.render([Judgment("a", True, "fyi", "w", line="a tip")],
+                               by_id, heading="Reddit", label_sources=True).body
+        self.assertIn("selfhosted", body)
+
+    def test_the_label_is_outside_the_link(self):
+        """Inside the anchor it would read as part of the tip."""
+        by_id = {"a": It("a", "T", source_id="digest/homelab")}
+        body = renderer.render([Judgment("a", True, "fyi", "w", line="a tip")],
+                               by_id, heading="Reddit", label_sources=True).body
+        self.assertLess(body.index("homelab"), body.index("<a href"))
+
+    def test_a_single_source_task_gets_no_label(self):
+        by_id = {"a": It("a", "T", source_id="claude-whats-new")}
+        body = renderer.render([Judgment("a", True, "fyi", "w", line="a tip")],
+                               by_id, heading="Claude", label_sources=False).body
+        self.assertNotIn("claude-whats-new", body)
+
+    def test_a_source_id_without_a_task_prefix_yields_no_label(self):
+        by_id = {"a": It("a", "T", source_id="bare")}
+        body = renderer.render([Judgment("a", True, "fyi", "w", line="a tip")],
+                               by_id, heading="X", label_sources=True).body
+        self.assertNotIn("bare", body)
+
+
+class Headings(unittest.TestCase):
+    def test_date_and_time_are_both_substituted(self):
+        import time as _t
+        from curated_digest.dispatch import _heading
+        task = type("T", (), {"heading": "Reddit · {date} {time}"})()
+        now = _t.mktime((2026, 9, 16, 14, 5, 0, 0, 0, -1))
+        self.assertEqual(_heading(task, now), "Reddit · Sep 16 14:05")
+
+    def test_a_heading_without_placeholders_is_left_alone(self):
+        from curated_digest.dispatch import _heading
+        task = type("T", (), {"heading": "host"})()
+        self.assertEqual(_heading(task, 0), "host")

@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from curated_digest.task import Task, TaskError, load_all, load_task, parse_schedule, is_due  # noqa: E402
+from curated_digest.task import (  # noqa: E402
+    Task, TaskError, in_window, is_due, load_all, load_task, parse_schedule)
 
 GOOD = """\
 id: {id}
@@ -320,3 +321,138 @@ heading: H
   - {type: rss, url: https://a.com/f.xml}
   - {type: rss, url: not-a-url}
 """))
+
+
+SHELL = """\
+id: {id}
+source:
+  - {{type: shell, id: disk, run: "checks/disk.sh"}}
+  - {{type: shell, id: backups, run: "checks/backups.sh"}}
+criteria: |
+  Facts about the host.
+schedule: daily at 07:00
+model: gemini:gemini-3.6-flash
+renderer: telegram
+channel: telegram
+urgency: digest
+heading: "host"
+"""
+
+
+class ShellSourceSchemaTests(unittest.TestCase):
+    """`run` and `url` are two ways to address a source and exactly one applies
+    to any given type. Accepting both would leave Source.locator picking a
+    winner silently, which is the kind of config bug that only shows up as a
+    check that mysteriously never fires."""
+
+    def setUp(self):
+        self.tmp = TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_a_shell_source_carries_its_command_as_the_locator(self):
+        t = load_task(write(self.dir, "host.yaml", SHELL.format(id="host")))
+        self.assertEqual([s.locator for s in t.sources],
+                         ["checks/disk.sh", "checks/backups.sh"])
+        self.assertEqual([s.id for s in t.sources], ["host/disk", "host/backups"])
+
+    def test_a_network_source_still_locates_by_url(self):
+        t = load_task(write(self.dir, "good.yaml", GOOD.format(id="good")))
+        self.assertEqual(t.sources[0].locator, "https://example.com/feed.xml")
+
+    def test_a_shell_source_with_a_url_is_rejected(self):
+        body = SHELL.format(id="host").replace(
+            '{type: shell, id: disk, run: "checks/disk.sh"}',
+            '{type: shell, id: disk, run: "checks/disk.sh", url: "https://x.test/"}')
+        with self.assertRaises(TaskError):
+            load_task(write(self.dir, "host.yaml", body))
+
+    def test_a_shell_source_without_a_command_is_rejected(self):
+        body = SHELL.format(id="host").replace('run: "checks/disk.sh"', 'run: "   "')
+        with self.assertRaises(TaskError):
+            load_task(write(self.dir, "host.yaml", body))
+
+    def test_run_on_a_network_source_is_rejected_rather_than_ignored(self):
+        body = GOOD.format(id="good").replace(
+            "{type: rss, url: https://example.com/feed.xml}",
+            '{type: rss, url: "https://example.com/feed.xml", run: "rm -rf /"}')
+        with self.assertRaises(TaskError):
+            load_task(write(self.dir, "good.yaml", body))
+
+    def test_an_unnamed_shell_check_in_a_list_is_rejected(self):
+        """There is no url to slug, so an auto-id would key state on list
+        position and silently follow a different check after a reorder."""
+        body = SHELL.format(id="host").replace("id: disk, ", "")
+        with self.assertRaises(TaskError):
+            load_task(write(self.dir, "host.yaml", body))
+
+    def test_an_unsupported_source_type_is_still_rejected(self):
+        body = GOOD.format(id="good").replace("type: rss", "type: carrier-pigeon")
+        with self.assertRaises(TaskError):
+            load_task(write(self.dir, "good.yaml", body))
+
+
+class WindowTests(unittest.TestCase):
+    """The window gates RUNNING, not sending. A held task must cost nothing and
+    lose nothing: no fetch, no model spend, no recorded run, and therefore due
+    again the moment the window opens."""
+
+    DAY = (2026, 9, 16)
+
+    def at(self, hour, minute=0):
+        import calendar
+        return calendar.timegm((*self.DAY, hour, minute, 0, 0, 0, -1))
+
+    def test_no_window_means_always_open(self):
+        self.assertTrue(is_due("every 30m", None, self.at(3), tz_offset_hours=0))
+
+    def test_a_task_inside_its_window_is_due(self):
+        self.assertTrue(is_due("every 30m", None, self.at(9), tz_offset_hours=0,
+                               window="07:00-22:00"))
+
+    def test_a_task_outside_its_window_is_not_due(self):
+        self.assertFalse(is_due("every 30m", None, self.at(3), tz_offset_hours=0,
+                                window="07:00-22:00"))
+
+    def test_the_window_start_is_inclusive_and_the_end_exclusive(self):
+        self.assertTrue(is_due("every 30m", None, self.at(7, 0), tz_offset_hours=0,
+                               window="07:00-22:00"))
+        self.assertFalse(is_due("every 30m", None, self.at(22, 0), tz_offset_hours=0,
+                                window="07:00-22:00"))
+
+    def test_a_window_that_wraps_midnight_is_open_on_both_sides(self):
+        for hour in (23, 2, 5):
+            self.assertTrue(in_window("22:00-06:00", self.at(hour), tz_offset_hours=0),
+                            f"{hour}:00 should be inside 22:00-06:00")
+        self.assertFalse(in_window("22:00-06:00", self.at(12), tz_offset_hours=0))
+
+    def test_an_overdue_task_held_by_the_window_fires_when_it_opens(self):
+        """The whole point: nothing is lost by holding, because nothing ran."""
+        last_run = self.at(6) - 86400
+        self.assertFalse(is_due("every 30m", last_run, self.at(3),
+                                tz_offset_hours=0, window="07:00-22:00"))
+        self.assertTrue(is_due("every 30m", last_run, self.at(7, 1),
+                               tz_offset_hours=0, window="07:00-22:00"))
+
+    def test_a_malformed_window_is_rejected_at_load(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            body = GOOD.format(id="good") + 'window: "7-10"\n'
+            with self.assertRaises(TaskError):
+                load_task(write(tmp, "good.yaml", body))
+
+    def test_a_zero_length_window_is_rejected_rather_than_never_opening(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            body = GOOD.format(id="good") + 'window: "09:00-09:00"\n'
+            with self.assertRaises(TaskError):
+                load_task(write(tmp, "good.yaml", body))
+
+    def test_a_valid_window_survives_the_round_trip(self):
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            body = GOOD.format(id="good") + 'window: "07:00-22:00"\n'
+            self.assertEqual(load_task(write(tmp, "good.yaml", body)).window,
+                             "07:00-22:00")

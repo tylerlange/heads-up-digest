@@ -69,7 +69,7 @@ class ModelOverride(unittest.TestCase):
         # parse onwards runs for real, so the model spec travels the same path
         # a scheduled run would take it down.
         feed = (FIXTURES / "rss2.xml").read_bytes()
-        fetch = unittest.mock.patch("curated_digest.dispatch.rss.fetch",
+        fetch = unittest.mock.patch("curated_digest.sources.rss.fetch",
                                     return_value=(feed, {}))
         fetch.start()
         self.addCleanup(fetch.stop)

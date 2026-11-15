@@ -95,10 +95,14 @@ class ParsingSeveralFindingsPerItem(unittest.TestCase):
 
 class RenderingSeveralFindingsPerItem(unittest.TestCase):
     def test_one_item_can_produce_bullets_in_both_tiers(self):
+        # Three findings, not two: below TIER_HEADER_MIN the renderer drops the
+        # headers entirely, and this test is about which tier a finding lands
+        # in, not about the short-digest layout.
         js = [Judgment("a", True, "act", "w", False, "Parallel subagents, on by default"),
+              Judgment("a", True, "act", "w", False, "Hooks run before tool use"),
               Judgment("a", True, "fyi", "w", False, "/cost now reports session spend")]
         body = renderer.render(js, {"a": It("a")}, heading="Claude").body
-        self.assertEqual(body.count("•"), 2)
+        self.assertEqual(body.count("•"), 3)
         # Each finding lands in the tier it earned, so the actionable half of a
         # release note is not buried under the trivia it shipped with.
         self.assertLess(body.index("Parallel subagents"), body.index("Worth knowing"))
@@ -130,7 +134,7 @@ class StoreStateAcrossSeveralFindings(unittest.TestCase):
         store.ensure_schema(self.c)
 
         feed = (FIXTURES / "rss2.xml").read_bytes()
-        for target in ("curated_digest.dispatch.rss.fetch",):
+        for target in ("curated_digest.sources.rss.fetch",):
             p = unittest.mock.patch(target, return_value=(feed, {}))
             p.start()
             self.addCleanup(p.stop)
