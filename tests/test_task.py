@@ -287,7 +287,7 @@ heading: H
         with TemporaryDirectory() as tmp:
             t = load_task(self._write(tmp, self.BASE + """source:
   - {type: rss, url: https://www.reddit.com/r/selfhosted/.rss}
-  - {type: rss, url: https://www.reddit.com/r/pixel_phones/.rss}
+  - {type: rss, url: https://www.reddit.com/r/homelab/.rss}
 """))
         ids = [s.id for s in t.sources]
         self.assertEqual(len(set(ids)), 2)

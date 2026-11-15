@@ -32,8 +32,8 @@ class UrlTargeting(unittest.TestCase):
     def test_a_subreddit_name_is_found_in_the_usual_url_shapes(self):
         for url in ("https://www.reddit.com/r/selfhosted/",
                     "https://www.reddit.com/r/selfhosted",
-                    "https://old.reddit.com/r/pixel_phones/"):
-            self.assertIn(reddit.target(url)[0], ("selfhosted", "pixel_phones"))
+                    "https://old.reddit.com/r/homelab/"):
+            self.assertIn(reddit.target(url)[0], ("selfhosted", "homelab"))
 
     def test_a_url_with_no_subreddit_is_an_error(self):
         with self.assertRaises(SourceError):
