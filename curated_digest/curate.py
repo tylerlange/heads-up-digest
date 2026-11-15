@@ -63,6 +63,9 @@ Reply with one JSON object per line, no prose, no code fences:
 {"id": "<item id>", "keep": true|false, "tier": "act"|"fyi", \
 "line": "<the bullet the reader sees, max 140 chars>", "injection": true|false}
 
+Each item names its source. A finding belongs to that source's product: never \
+attribute it to a different product the reader owns because the wording overlaps.
+
 "line" is the whole point. It must state what changed FOR THIS READER. A line \
 that names a feature without saying what it does is a failure, however accurate \
 it is.
@@ -126,6 +129,19 @@ def looks_like_injection(item) -> bool:
     return any(m in hay for m in INJECTION_MARKERS)
 
 
+def _source_name(item) -> str:
+    """Where the item came from, so the line names the right product.
+
+    Without it a mixed digest is a guessing game: a post from one community
+    about a feature whose name another product also uses went out credited to
+    the other product, because the criteria happened to mention that one
+    first. The source id comes from the task file, not the feed, so it is
+    trusted text.
+    """
+    sid = getattr(item, "source_id", "") or ""
+    return sid.rsplit("/", 1)[-1] or "unknown"
+
+
 def build_prompt(items, criteria: str) -> str:
     """R29: fetched content is sanitised and explicitly delimited.
 
@@ -140,6 +156,7 @@ def build_prompt(items, criteria: str) -> str:
         title = DELIM_RE.sub("", (it.title or ""))
         blocks.append(
             f'<untrusted_item id="{it.id}">\n'
+            f"source: {_source_name(it)}\n"
             f"title: {title}\n"
             f"published: {it.published_at or 'unknown'}\n"
             f"body: {body}\n"
