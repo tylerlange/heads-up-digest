@@ -194,6 +194,10 @@ def _fetch_source(conn, src, out) -> str:
         return "failed"
     store.record_success(conn, src.id, etag=resp.get("etag"),
                          last_modified=resp.get("last-modified"))
+    if getattr(impl, "FINDINGS_ARE_CURRENT", False):
+        # D37: a check's findings are states, not events. One it stopped
+        # reporting is resolved, so a recurrence must alert again.
+        store.forget_resolved(conn, src.id, [it.id for it in items])
     out["new"] += store.ingest(conn, items)
     return "ok"
 

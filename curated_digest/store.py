@@ -161,6 +161,35 @@ def ingest(conn, items) -> int:
     return new
 
 
+def forget_resolved(conn, source_id, current_ids) -> int:
+    """D37: drop a state-reporting source's findings that it no longer reports.
+
+    R12 ("reported once, never again") is right for events and wrong for
+    states. A check headline is its identity, so without this a fault that
+    clears and later recurs matches the old `reported` row and is suppressed
+    forever: a poller that stopped for 12 days stayed silent because the same
+    headline had been delivered once, weeks earlier, for a different outage.
+
+    Called only after a successful fetch and parse, so a broken check (R36)
+    never clears anything. Removes the item and every task's `reported` row
+    for it; a recurrence is re-ingested as new and reported again. Returns
+    the number of findings forgotten.
+    """
+    keep = set(current_ids)
+    gone = [r["item_id"] for r in conn.execute(
+        "SELECT item_id FROM items WHERE source_id=?", (source_id,))
+        if r["item_id"] not in keep]
+    gone += [r["item_id"] for r in conn.execute(
+        "SELECT DISTINCT item_id FROM reported WHERE source_id=?", (source_id,))
+        if r["item_id"] not in keep and r["item_id"] not in gone]
+    for iid in gone:
+        conn.execute("DELETE FROM reported WHERE source_id=? AND item_id=?",
+                     (source_id, iid))
+        conn.execute("DELETE FROM items WHERE source_id=? AND item_id=?",
+                     (source_id, iid))
+    return len(gone)
+
+
 def candidates(conn, task_id, source_ids, limit=None) -> list[sqlite3.Row]:
     """Items this task has not reported yet, newest first.
 
