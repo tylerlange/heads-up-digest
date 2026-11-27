@@ -25,6 +25,12 @@ dedup key. A check that restates the same problem every six hours produces one
 item and is reported once. Volatile detail (counts, ages, byte sizes) belongs
 in the body, never in that first line — put "5 days" in the title and every run
 mints a new item and re-notifies.
+
+That identity lasts only as long as the condition does (D37). A feed item is
+an event: once reported, it is done. A check finding is a state: when the
+check stops reporting it, the problem is over, and the same headline next
+month is a new occurrence that must alert again. FINDINGS_ARE_CURRENT tells
+the dispatcher to forget findings this check no longer reports.
 """
 import json
 import os
@@ -39,6 +45,7 @@ MAX_OUTPUT_BYTES = 64_000
 BODY_CHARS = 4000
 TITLE_CHARS = 200
 TIMEOUT_SECONDS = 60
+FINDINGS_ARE_CURRENT = True
 
 # R32: no process handling content destined for a prompt carries secrets. These
 # checks are the most privileged thing in the pipeline — they run shell on the

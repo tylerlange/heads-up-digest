@@ -72,7 +72,8 @@ this system can be wrong.
 
 - **R11.** Durable per-task state survives restart and reboot.
 - **R12.** Items are deduplicated by stable identity (GUID; fallback content hash).
-  An item reported once is never reported again.
+  An item reported once is never reported again. (Check findings are states:
+  one that clears is forgotten, so a recurrence alerts again; D37.)
 - **R13.** Ingested items are **retained**, not discarded after one use — a later
   renderer (a print edition) may need items an earlier one already saw.
 - **R14.** State advances **only after delivery is confirmed**. A send failure leaves

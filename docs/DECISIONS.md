@@ -364,6 +364,24 @@ task file, so it is trusted text and adds no injection surface.
 **Revisit if:** a source id stops naming its product (an opaque id like
 `feed1`). The fix then is an optional, operator-written `about:` per source.
 
+### D37. A check finding lasts as long as the condition, not forever
+R12 ("an item reported once is never reported again") is right for feed items,
+which are events. A shell check's finding is a state, identified by its
+headline (D32). Under R12 a fault that cleared and later recurred matched the
+old `reported` row and was suppressed: a poller stopped for twelve days and the
+digest stayed silent because the same headline had been delivered weeks
+earlier, for a different outage. Now, after a successful fetch and parse, a
+source that declares `FINDINGS_ARE_CURRENT` (shell) forgets every finding it no
+longer reports: the item and all tasks' `reported` rows. A recurrence is a new
+item and alerts again. A broken check (R36) clears nothing, and a dry run's
+forgetting is rolled back with the rest of its writes (R46).
+
+Cost: a check that flaps re-alerts on every return. That is accepted; a
+flapping fault is worth hearing about, and R16 escalation is the place to
+damp it if it gets noisy.
+
+**Revisit if:** a source needs both behaviours, or flapping checks become noise.
+
 ## Open
 
 - ~~**O1** Repo name.~~ **Resolved: `curated-digest`.**
